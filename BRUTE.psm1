@@ -27,7 +27,7 @@ function Get-HttpSession {
     if (-not (Test-Path $TOKEN_FILE_PATH)) {
         throw "SSO token not set, use 'Set-BruteSSOToken' to store it."
     }
-    $AuthCookieName, $AuthCookieValue = (cat -Raw $TOKEN_FILE_PATH) -split "=", 2
+    $AuthCookieName, $AuthCookieValue = (Get-Content -Raw $TOKEN_FILE_PATH) -split "=", 2
     if (-not $AuthCookieValue) {
         throw "Malformed SSO token, use 'Set-BruteSSOToken' to replace it."
     }
@@ -72,10 +72,10 @@ function Get-BruteUpload {
     $DownloadPath = New-TmpPath ".tgz"
     try {
         Invoke-BruteRequest $DownloadUrl -OutFile $DownloadPath
-        $null = mkdir $OutputDir -Force
+        $null = New-Item -Type Directory $OutputDir -Force
         tar xzf $DownloadPath --directory $OutputDir
     } finally {
-        rm -ErrorAction Ignore $DownloadPath
+        Remove-Item -ErrorAction Ignore $DownloadPath
     }
 }
 
