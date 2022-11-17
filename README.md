@@ -1,5 +1,7 @@
 # PSBrute
 
+Functions to interface with the BRUTE evaluation system at FEE CTU in Prague.
+
 ## Installation
 
 Clone this repository to a directory that's in your `$env:PSModulePath`. Note that the cloned directory **must be called `BRUTE`**, which is also the module's name.
