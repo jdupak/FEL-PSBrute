@@ -1,11 +1,11 @@
 using module .\EvaluationFormatting.psm1
-using module .\Utils.psm1
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 
 $TOKEN_FILE_PATH = if (Get-Command Get-PSDataPath -ErrorAction Ignore) {
+    # this function is from my custom profile (https://github.com/MatejKafka/powershell-profile)
     Get-PSDataPath -NoCreate BruteSSOToken.txt
 } else {
     # user does not have my custom profile with Get-PSDataPath, use a fallback path
@@ -20,6 +20,11 @@ function Set-BruteSSOToken([Parameter(Mandatory)][string]$Token) {
         throw "Invalid SSO token cookie format. Expected something like '_shibsession_...=...'."
     }
     Set-Content -NoNewline -Path $script:TOKEN_FILE_PATH $Token
+}
+
+function New-TemporaryPath($Extension = "", $Prefix = "") {
+    $Tmp = if ($IsWindows) {$env:TEMP} else {"/tmp"}
+    return Join-Path $Tmp "$Prefix$(New-Guid)$Extension"
 }
 
 
@@ -38,7 +43,8 @@ function Get-HttpSession {
 
 function Invoke-BruteRequest([Parameter(Mandatory)][uri]$Url, [Hashtable]$PostParameters = $null, $OutFile) {
     $IwrParams = if ($PostParameters) {
-        # copy parameter Hashtable over to the query string dictionary $qp
+        # copy parameter Hashtable over to the query string dictionary $qp; for some reason,
+        #  the query string .NET class is not public, so we parse an empty string to get a usable instance
         $qp = [System.Web.HttpUtility]::ParseQueryString("")
         foreach ($k in $PostParameters.Keys) {
             $qp[$k] = $PostParameters[$k]
@@ -48,6 +54,7 @@ function Invoke-BruteRequest([Parameter(Mandatory)][uri]$Url, [Hashtable]$PostPa
         @{} # GET request, no extra params
     }
     if ($OutFile) {$IwrParams["OutFile"] = $OutFile}
+
     try {
         return Invoke-WebRequest $Url -WebSession (Get-HttpSession) -MaximumRedirection 0 @IwrParams
     } catch [Microsoft.PowerShell.Commands.HttpResponseException] {
@@ -69,7 +76,7 @@ function Get-BruteUpload {
 
     $DownloadUrl = $Evaluation.SubmissionUrl
     # BRUTE always returns .tgz archives
-    $DownloadPath = New-TmpPath ".tgz"
+    $DownloadPath = New-TemporaryPath ".tgz"
     try {
         Invoke-BruteRequest $DownloadUrl -OutFile $DownloadPath
         $null = New-Item -Type Directory $OutputDir -Force
@@ -131,9 +138,14 @@ class BruteEvaluation {
 }
 
 function Get-BruteEvaluation {
+    # .SYNOPSIS
+    # Scrapes the passed evaluation page from BRUTE to retrieve the current evaluation (if set)
+    # and hidden parameters necessary to submit a new evaluation (assignment ID, student ID,...).
     [CmdletBinding()]
+    [OutputType([BruteEvaluation])]
     param([Parameter(Mandatory)][uri]$Url)
 
+    # list of input fields to scrape from the evaluation page
     $ForwardedInputFields = @(
         "manual_score", "ae_score", "penalty", "score", "assignment_id", "course_id",
         "id", "team_id", "status", "hours_after_deadline", "student_id", "submit_evaluation")
@@ -146,6 +158,7 @@ function Get-BruteEvaluation {
     $Response = Invoke-BruteRequest $Url
     
     $AEParams = @{}
+    # this is a file upload input to upload a custom PDF evaluation, not implemented yet
     $AEParams.upload_result = $null
     # "Text Evaluation" text field
     $EvalRaw, $AEParams.evaluation = Get-OriginalEvaluationText $Response.Content "EVALUATION"
@@ -160,6 +173,7 @@ function Get-BruteEvaluation {
         try {$AEParams[$Field.Name] = $Field.value}
         catch {throw "Forwarded field with 'name=`"$FieldName`"' in the AE page has no value."}
     }
+
     return [BruteEvaluation]@{
         Url = $Url
         SubmissionUrl = $SubmissionDownloadUrl
@@ -192,6 +206,8 @@ function Set-BruteEvaluation {
 }
 
 function New-BruteEvaluation {
+    # .SYNOPSIS
+    # Convenience wrapper around Get-BruteEvaluation and Set-BruteEvaluation.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][uri]$Url,
@@ -231,7 +247,8 @@ class BruteStudent {
         return "https://cw.felk.cvut.cz" + $this._Parallel._Response.Links[$this._FirstSubmissionLinkI + $AssignmentI].href
     }
 
-    # TODO: add method to extract the assignment info (points, acceptability) from the <a> content
+    # TODO: add method to extract the assignment info (points, acceptability)
+    #  from the <a> content, without having to invoke Get-BruteEvaluation
 }
 
 class BruteParallel {
@@ -373,6 +390,12 @@ class BruteCourseTable {
     }
 }
 
-function Get-BruteCourseTable([Parameter(Mandatory)][uri]$CourseUrl) {
+function Get-BruteCourseTable {
+    # .SYNOPSIS
+    # Retrieve course information.
+    [CmdletBinding()]
+    [OutputType([BruteCourseTable])]
+    param([Parameter(Mandatory)][uri]$CourseUrl)
+
     return [BruteCourseTable]::new($CourseUrl)
 }
