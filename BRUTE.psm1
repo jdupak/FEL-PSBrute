@@ -12,8 +12,15 @@ $TOKEN_FILE_PATH = if (Get-Command Get-PSDataPath -ErrorAction Ignore) {
     Join-Path $PSScriptRoot "_BruteSSOToken.txt"
 }
 
+
+class InvalidBruteSSOTokenException : System.Exception {
+    InvalidBruteSSOTokenException([string]$Message) : base($Message) {}
+}
+
 # copy the SSO authentication cookie from your browser; it times out after something like 1 hour of inactivity
 # the cookie is always named "_shibsession_???...", the suffix varies
+# I use the following browser bookmark to copy the SSO token to clipboard:
+# `javascript:navigator.clipboard.writeText(document.cookie.split("; ").filter(c => c.startsWith("_shibsession")).join("; ")).then(() => alert("SSO token copied to the clipboard."), (err) => alert("Could not copy the SSO token: " + err))`
 function Set-BruteSSOToken([Parameter(Mandatory)][string]$Token) {
     $Token = $Token.Trim()
     if ($Token -notmatch "^_shibsession_[a-zA-Z0-9]+=.+$") {
@@ -30,11 +37,11 @@ function New-TemporaryPath($Extension = "", $Prefix = "") {
 
 function Get-HttpSession {
     if (-not (Test-Path $TOKEN_FILE_PATH)) {
-        throw "SSO token not set, use 'Set-BruteSSOToken' to store it."
+        throw [InvalidBruteSSOTokenException]::new("SSO token not set, use 'Set-BruteSSOToken' to store it.")
     }
     $AuthCookieName, $AuthCookieValue = (Get-Content -Raw $TOKEN_FILE_PATH) -split "=", 2
     if (-not $AuthCookieValue) {
-        throw "Malformed SSO token, use 'Set-BruteSSOToken' to replace it."
+        throw [InvalidBruteSSOTokenException]::new("Malformed SSO token, use 'Set-BruteSSOToken' to replace it.")
     }
     $Session = [Microsoft.PowerShell.Commands.WebRequestSession]::new()
     $Session.Cookies.Add(([System.Net.Cookie]::new($AuthCookieName, $AuthCookieValue, "/", "cw.felk.cvut.cz")))
@@ -61,7 +68,7 @@ function Invoke-BruteRequest([Parameter(Mandatory)][uri]$Url, [Hashtable]$PostPa
         $res = $_.Exception.Response
         # check if we are being redirected to the SSO portal
         if ($res.StatusCode -eq 302 -and $res.Headers.Location.OriginalString.StartsWith("https://idp2.civ.cvut.cz")) {
-            throw "Not authorized, did the SSO token expire?"
+            throw [InvalidBruteSSOTokenException]::new("Not authorized, did the SSO token expire?")
         }
         throw
     }
@@ -213,8 +220,8 @@ function New-BruteEvaluation {
         [Parameter(Mandatory)][uri]$Url,
         [Nullable[float]]$ManualScore = $null,
         [Nullable[float]]$Penalty = $null,
-        $Evaluation = $null,
-        $Note = $null
+        [Nullable[string]]$Evaluation = $null,
+        [Nullable[string]]$Note = $null
     )
 
     $eval = Get-BruteEvaluation $Url
@@ -232,6 +239,25 @@ function New-BruteEvaluation {
 }
 
 
+class BruteSubmissionInfo {
+    [string]$UserName
+    [string]$Url
+    [bool]$Submitted
+    [float]$AeScore
+    [float]$Penalty = 0
+    [Nullable[float]]$ManualScore = $null
+
+    [string] Format() {
+        if (-not $this.Submitted) {return "---"}
+        $s = ""
+        $s += if ($null -ne $this.ManualScore) {"" + $this.ManualScore + "+"} else {"("}
+        $s += $global:PSStyle.Foreground.BrightBlue + $this.AeScore + $global:PSStyle.Reset
+        $s += if ($null -eq $this.ManualScore) {")"}
+        if ($this.Penalty) {$s += $global:PSStyle.Foreground.BrightRed + "-" + $this.Penalty + $global:PSStyle.Reset}
+        return $s
+    }
+}
+
 class BruteStudent {
     [string]$UserName
 
@@ -242,13 +268,50 @@ class BruteStudent {
         return $this.GetSubmissionURL($this._Parallel.GetAssignmentI($AssignmentName))
     }
 
-    [string] GetSubmissionURL([int]$AssignmentI) {
-        # e.g. https://cw.felk.cvut.cz/brute/teacher/upload/1370876/12898
-        return "https://cw.felk.cvut.cz" + $this._Parallel._Response.Links[$this._FirstSubmissionLinkI + $AssignmentI].href
+    [BruteSubmissionInfo] GetSubmissionInfo([string]$AssignmentName) {
+        return $this.GetSubmissionScore($this._Parallel.GetAssignmentI($AssignmentName))
     }
 
-    # TODO: add method to extract the assignment info (points, acceptability)
-    #  from the <a> content, without having to invoke Get-BruteEvaluation
+    [string] GetSubmissionURL([int]$AssignmentI) {
+        # e.g. https://cw.felk.cvut.cz/brute/teacher/upload/1370876/12898
+        $Link = $this._Parallel._Response.Links[$this._FirstSubmissionLinkI + $AssignmentI]
+        if ($Link.href -like "/brute/teacher/upload/new/*/*" -or $Link.outerHTML -like "*>---<*") {
+            return $null # nothing uploaded yet
+        }
+        return "https://cw.felk.cvut.cz" + $Link.href
+    }
+
+    [BruteSubmissionInfo] GetSubmissionInfo([int]$AssignmentI) {
+        $Link = $this._Parallel._Response.Links[$this._FirstSubmissionLinkI + $AssignmentI]
+        $Html = $Link.outerHTML
+        $Info = [BruteSubmissionInfo]@{UserName = $this.UserName; Url = $this.GetSubmissionURL($AssignmentI)}
+        if ($Html -like '<a href="*">---*</a>') {
+            # not uploaded yet
+            $Info.Submitted = $false
+            return $Info
+        }
+
+        $Info.Submitted = $true
+        if ($Html -match '<SPAN CLASS="red"> - (-?\d+(\.\d+)?)</SPAN>') {
+            $Info.Penalty = $Matches[1]
+        }
+        if ($Html -match '<SPAN CLASS="blue">(-?\d+(\.\d+)?)</SPAN>') {
+            $Info.AeScore = $Matches[1]
+        }
+        if ($Html -match '<span style="font-weight: bold">(-?\d+(\.\d+)?)\+') {
+            $Info.ManualScore = $Matches[1]
+        }
+        return $Info
+    }
+
+    [pscustomobject] Format() {
+        $Out = [ordered]@{UserName = $this.UserName}
+        $Names = $this._Parallel.GetAssignmentNames()
+        for ($i = 0; $i -lt @($Names).Count; $i++) {
+            $Out[$Names[$i]] = $this.GetSubmissionInfo($i).Format()
+        }
+        return [pscustomobject]$Out
+    }
 }
 
 class BruteParallel {
@@ -333,6 +396,10 @@ class BruteParallel {
     [string[]] GetSubmissionURLs([string]$AssignmentName) {
         $ai = $this.GetAssignmentI($AssignmentName)
         return $this.GetStudents().GetSubmissionURL($ai)
+    }
+
+    [pscustomobject[]] FormatTable() {
+        return $this.GetStudents().Format() | Format-Table -Property * -AutoSize
     }
 }
 
