@@ -220,8 +220,8 @@ function New-BruteEvaluation {
         [Parameter(Mandatory)][uri]$Url,
         [Nullable[float]]$ManualScore = $null,
         [Nullable[float]]$Penalty = $null,
-        [Nullable[string]]$Evaluation = $null,
-        [Nullable[string]]$Note = $null
+        [AllowNull()][string]$Evaluation = $null,
+        [AllowNull()][string]$Note = $null
     )
 
     $eval = Get-BruteEvaluation $Url
