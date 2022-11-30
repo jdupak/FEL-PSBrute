@@ -94,6 +94,7 @@ function Get-BruteUpload {
 }
 
 class BruteEvaluation {
+    [string]$UserName
     [string]$Url
     [string]$SubmissionUrl
     [string]$AeOutputUrl
@@ -173,7 +174,17 @@ function Get-BruteEvaluation {
     # "Note" text field
     $AEParams.note = Get-TextareaContent $Response.Content "note"
 
-    $AeOutputUrl = $Response.Links | ? href -like "/brute/data/*" | select -First 1 | % {"https://cw.felk.cvut.cz" + $_.href}
+    $AeOutputUrl = $null
+    $UserName = $null
+    foreach ($l in $Response.Links) {
+        if ($l.href -like "/brute/data/*") {
+            $AeOutputUrl = "https://cw.felk.cvut.cz" + $l.href
+        } elseif ($l.href -match "/brute/teacher/student/(.*)") {
+            $UserName = $Matches[1]
+        }
+    }
+    if (-not $AeOutputUrl) {throw "Could not find AE output link in the HTML."}
+    if (-not $UserName) {throw "Could not find student username in the HTML."}
 
     foreach ($FieldName in $ForwardedInputFields) {
         $Field = $Response.InputFields.FindByName($FieldName)
@@ -183,6 +194,7 @@ function Get-BruteEvaluation {
     }
 
     return [BruteEvaluation]@{
+        UserName = $UserName
         Url = $Url
         SubmissionUrl = $SubmissionDownloadUrl
         AeOutputUrl = $AeOutputUrl
