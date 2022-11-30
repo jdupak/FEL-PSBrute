@@ -34,7 +34,7 @@ function Format-EvaluationText([Parameter(Mandatory)]$Str, [Parameter(Mandatory)
     return "</pre>`n`n" + $OriginalContentComment + "`n`n" + $script:PREFIX + "`n$RenderedStr`n" + $script:SUFFIX + "`n<pre>"
 }
 
-function GetTextareaContent($EvalPageContent, $TextareaName) {
+function Get-TextareaContent($EvalPageContent, $TextareaName) {
     # ?s: = make `.` match all characters, including a newline
     # .*? = lazy match, find the first </textarea> occurrence, not the last
     $Pattern = '<textarea class="[^"]+" cols="\d*" rows="\d*" id="[^"]+" name="' + $TextareaName + '"\s*>(?s:(.*?))</textarea>'
@@ -50,11 +50,11 @@ function Get-OriginalEvaluationText([Parameter(Mandatory)]$EvalPageContent, [Par
     $iEnd = $EvalPageContent.IndexOf($MarkerEnd)
     if ($i -lt 0 -or $iEnd -lt 0) {
         # did not find the marks, try to just find the <textarea> and get the raw content
-        return $true, (GetTextareaContent $EvalPageContent $Tag.ToLower())
+        return $true, (Get-TextareaContent $EvalPageContent $Tag.ToLower())
     }
     # +1 / -1 to account for the added newline
     $iStart = $i + $MarkerStart.Length + 1
     return $false, $EvalPageContent.Substring($iStart, $iEnd - $iStart - 1)
 }
 
-Export-ModuleMember Format-EvaluationText, Get-OriginalEvaluationText
+Export-ModuleMember Format-EvaluationText, Get-OriginalEvaluationText, Get-TextareaContent

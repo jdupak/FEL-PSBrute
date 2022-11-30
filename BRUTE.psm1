@@ -98,7 +98,6 @@ class BruteEvaluation {
     [string]$SubmissionUrl
     [string]$AeOutputUrl
     [bool]$EvaluationFieldIsRaw
-    [bool]$NoteFieldIsRaw
     [pscustomobject]$Parameters
 
     [bool] SetScore([Nullable[float]]$ManualScore, [Nullable[float]]$Penalty = $null) {
@@ -135,12 +134,14 @@ class BruteEvaluation {
 
     [void] SetEvaluationText([string]$EvaluationText) {
         $this.Parameters.evaluation = $EvaluationText
-        $this.EvaluationFieldIsRaw = $false
+        $this.EvaluationFieldIsRaw = $EvaluationText -eq ""
     }
 
     [void] SetNote([string]$Note) {
+        if ($Note.IndexOf("</textarea>") -ge 0) {
+            throw "Note must not contain the substring '</textarea>', otherwise it would break the evaluation page."
+        }
         $this.Parameters.note = $Note
-        $this.NoteFieldIsRaw = $false
     }
 }
 
@@ -170,7 +171,7 @@ function Get-BruteEvaluation {
     # "Text Evaluation" text field
     $EvalRaw, $AEParams.evaluation = Get-OriginalEvaluationText $Response.Content "EVALUATION"
     # "Note" text field
-    $NoteRaw, $AEParams.note = Get-OriginalEvaluationText $Response.Content "NOTE"
+    $AEParams.note = Get-TextareaContent $Response.Content "note"
 
     $AeOutputUrl = $Response.Links | ? href -like "/brute/data/*" | select -First 1 | % {"https://cw.felk.cvut.cz" + $_.href}
 
@@ -186,7 +187,6 @@ function Get-BruteEvaluation {
         SubmissionUrl = $SubmissionDownloadUrl
         AeOutputUrl = $AeOutputUrl
         EvaluationFieldIsRaw = $EvalRaw
-        NoteFieldIsRaw = $NoteRaw
         Parameters = $AEParams
     }
 }
@@ -196,9 +196,8 @@ function Set-BruteEvaluation {
     param([Parameter(Mandatory)][BruteEvaluation]$Evaluation)
 
     $p = $Evaluation.Parameters
-    # render 'Evaluation Text' and 'Note' if not raw
+    # render 'Evaluation Text' if not raw
     $p.evaluation = if ($Evaluation.EvaluationFieldIsRaw) {$p.evaluation} else {Format-EvaluationText $p.evaluation "EVALUATION"}
-    $p.note = if ($Evaluation.NoteFieldIsRaw) {$p.note} else {Format-EvaluationText $p.note "NOTE"}
 
     try {
         $null = Invoke-BruteRequest "https://cw.felk.cvut.cz/brute/teacher/upload.php" -PostParameters $p
@@ -220,8 +219,8 @@ function New-BruteEvaluation {
         [Parameter(Mandatory)][uri]$Url,
         [Nullable[float]]$ManualScore = $null,
         [Nullable[float]]$Penalty = $null,
-        [AllowNull()][string]$Evaluation = $null,
-        [AllowNull()][string]$Note = $null
+        $Evaluation = $null,
+        $Note = $null
     )
 
     $eval = Get-BruteEvaluation $Url
@@ -243,16 +242,19 @@ class BruteSubmissionInfo {
     [string]$UserName
     [string]$Url
     [bool]$Submitted
-    [float]$AeScore
+    [Nullable[float]]$AeScore = $null
     [float]$Penalty = 0
     [Nullable[float]]$ManualScore = $null
 
     [string] Format() {
         if (-not $this.Submitted) {return "---"}
         $s = ""
-        $s += if ($null -ne $this.ManualScore) {"" + $this.ManualScore + "+"} else {"("}
-        $s += $global:PSStyle.Foreground.BrightBlue + $this.AeScore + $global:PSStyle.Reset
-        $s += if ($null -eq $this.ManualScore) {")"}
+        $s += if ($null -ne $this.ManualScore) {"" + $this.ManualScore}
+        if ($null -ne $this.AeScore) {
+            $s += if ($null -ne $this.ManualScore) {"+"} else {"("}
+            $s += $global:PSStyle.Foreground.BrightBlue + $this.AeScore + $global:PSStyle.Reset
+            $s += if ($null -eq $this.ManualScore) {")"}
+        }
         if ($this.Penalty) {$s += $global:PSStyle.Foreground.BrightRed + "-" + $this.Penalty + $global:PSStyle.Reset}
         return $s
     }
@@ -298,7 +300,7 @@ class BruteStudent {
         if ($Html -match '<SPAN CLASS="blue">(-?\d+(\.\d+)?)</SPAN>') {
             $Info.AeScore = $Matches[1]
         }
-        if ($Html -match '<span style="font-weight: bold">(-?\d+(\.\d+)?)\+') {
+        if ($Html -match '<span style="font-weight: bold">(-?\d+(\.\d+)?)') {
             $Info.ManualScore = $Matches[1]
         }
         return $Info
