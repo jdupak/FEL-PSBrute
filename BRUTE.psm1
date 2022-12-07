@@ -3,6 +3,10 @@ using module .\EvaluationFormatting.psm1
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# if set to true, this module prompts for new SSO token on authentication failure,
+#  instead of throwing an exception
+$RETRY_ON_FAILED_AUTH = $False
+
 
 $TOKEN_FILE_PATH = if (Get-Command Get-PSDataPath -ErrorAction Ignore) {
     # this function is from my custom profile (https://github.com/MatejKafka/powershell-profile)
@@ -24,9 +28,27 @@ class InvalidBruteSSOTokenException : System.Exception {
 function Set-BruteSSOToken([Parameter(Mandatory)][string]$Token) {
     $Token = $Token.Trim()
     if ($Token -notmatch "^_shibsession_[a-zA-Z0-9]+=.+$") {
-        throw "Invalid SSO token cookie format. Expected something like '_shibsession_...=...'."
+        return RetryWithNewSSOToken "Invalid SSO token cookie format. Expected something like '_shibsession_...=...'."
     }
     Set-Content -NoNewline -Path $script:TOKEN_FILE_PATH $Token
+}
+
+function RetryWithNewSSOToken {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][System.Management.Automation.InvocationInfo]$MyInvocation_,
+        [Parameter(Mandatory)][string]$ErrorMessage
+    )
+    if ($RETRY_ON_FAILED_AUTH) {
+        Write-Host -ForegroundColor Red $ErrorMessage
+        Set-BruteSSOToken (Read-Host -MaskInput "Enter a new SSO token")
+        # retry
+        $bp = $MyInvocation_.BoundParameters
+        $ua = $MyInvocation_.UnboundArguments
+        return & $MyInvocation_.MyCommand @bp @ua
+    } else {
+        throw [InvalidBruteSSOTokenException]::new($ErrorMessage)
+    }
 }
 
 function New-TemporaryPath($Extension = "", $Prefix = "") {
@@ -37,11 +59,11 @@ function New-TemporaryPath($Extension = "", $Prefix = "") {
 
 function Get-HttpSession {
     if (-not (Test-Path $TOKEN_FILE_PATH)) {
-        throw [InvalidBruteSSOTokenException]::new("SSO token not set, use 'Set-BruteSSOToken' to store it.")
+        return RetryWithNewSSOToken $MyInvocation "SSO token not set, use 'Set-BruteSSOToken' to store it."
     }
     $AuthCookieName, $AuthCookieValue = (Get-Content -Raw $TOKEN_FILE_PATH) -split "=", 2
     if (-not $AuthCookieValue) {
-        throw [InvalidBruteSSOTokenException]::new("Malformed SSO token, use 'Set-BruteSSOToken' to replace it.")
+        return RetryWithNewSSOToken $MyInvocation "Malformed SSO token, use 'Set-BruteSSOToken' to replace it."
     }
     $Session = [Microsoft.PowerShell.Commands.WebRequestSession]::new()
     $Session.Cookies.Add(([System.Net.Cookie]::new($AuthCookieName, $AuthCookieValue, "/", "cw.felk.cvut.cz")))
@@ -68,7 +90,7 @@ function Invoke-BruteRequest([Parameter(Mandatory)][uri]$Url, [Hashtable]$PostPa
         $res = $_.Exception.Response
         # check if we are being redirected to the SSO portal
         if ($res.StatusCode -eq 302 -and $res.Headers.Location.OriginalString.StartsWith("https://idp2.civ.cvut.cz")) {
-            throw [InvalidBruteSSOTokenException]::new("Not authorized, did the SSO token expire?")
+            return RetryWithNewSSOToken $MyInvocation "Not authorized, did the SSO token expire?"
         }
         throw
     }
