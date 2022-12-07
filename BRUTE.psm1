@@ -123,7 +123,7 @@ class BruteEvaluation {
             $penalty = if ($p.penalty -eq "") {0} else {[float]::Parse($p.penalty)}
             $manual = if ($p.manual_score -eq "") {0} else {[float]::Parse($p.manual_score)}
             # round to hide float rounding errors
-            $p.score = [math]::Round($ManualScore + $penalty + [float]::Parse($p.ae_score), 4)
+            $p.score = [math]::Round($ManualScore - $penalty + [float]::Parse($p.ae_score), 4)
             if ($p.score -lt 0) {
                 $Acceptable = $false
             }
