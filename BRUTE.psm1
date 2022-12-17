@@ -28,12 +28,14 @@ class InvalidBruteSSOTokenException : System.Exception {
 function Set-BruteSSOToken([Parameter(Mandatory)][string]$Token, [switch]$PromptForSSOToken) {
     $Token = $Token.Trim()
     if ($Token -notmatch "^_shibsession_[a-zA-Z0-9]+=.+$") {
-        return RetryWithNewSSOToken "Invalid SSO token cookie format. Expected something like '_shibsession_...=...'." -PromptForSSOToken:$PromptForSSOToken
+        return RetryWithNewSSOToken "Invalid SSO token cookie format. Expected something like '_shibsession_...=...'." $PromptForSSOToken
     }
     Set-Content -NoNewline -Path $script:TOKEN_FILE_PATH $Token
 }
 
 function RetryWithNewSSOToken {
+    <# Unless disabled with -NoTokenPrompt (switch parameter for all exported commands),
+       automatically prompt for a new SSO token and rerun the caller function. #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][System.Management.Automation.InvocationInfo]$MyInvocation_,
@@ -103,14 +105,14 @@ function Get-BruteUpload {
     param(
         [Parameter(Mandatory)][BruteEvaluation]$Evaluation,
         [Parameter(Mandatory)][string]$OutputDir,
-        [switch]$PromptForSSOToken
+        [switch]$NoTokenPrompt
     )
 
     $DownloadUrl = $Evaluation.SubmissionUrl
     # BRUTE always returns .tgz archives
     $DownloadPath = New-TemporaryPath ".tgz"
     try {
-        Invoke-BruteRequest $DownloadUrl -OutFile $DownloadPath -PromptForSSOToken:$PromptForSSOToken
+        Invoke-BruteRequest $DownloadUrl -OutFile $DownloadPath -PromptForSSOToken:(-not $NoTokenPrompt)
         $null = New-Item -Type Directory $OutputDir -Force
         tar xzf $DownloadPath --directory $OutputDir
     } finally {
@@ -179,7 +181,7 @@ function Get-BruteEvaluation {
     [OutputType([BruteEvaluation])]
     param(
         [Parameter(Mandatory)][uri]$Url,
-        [switch]$PromptForSSOToken
+        [switch]$NoTokenPrompt
     )
 
     # list of input fields to scrape from the evaluation page
@@ -192,7 +194,7 @@ function Get-BruteEvaluation {
     }
     $SubmissionDownloadUrl = $Matches[1] + "/download"
 
-    $Response = Invoke-BruteRequest $Url -PromptForSSOToken:$PromptForSSOToken
+    $Response = Invoke-BruteRequest $Url -PromptForSSOToken:(-not $NoTokenPrompt)
     
     $AEParams = @{}
     # this is a file upload input to upload a custom PDF evaluation, not implemented yet
@@ -235,7 +237,7 @@ function Set-BruteEvaluation {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][BruteEvaluation]$Evaluation,
-        [switch]$PromptForSSOToken
+        [switch]$NoTokenPrompt
     )
 
     $p = $Evaluation.Parameters
@@ -243,7 +245,7 @@ function Set-BruteEvaluation {
     $p.evaluation = if ($Evaluation.EvaluationFieldIsRaw) {$p.evaluation} else {Format-EvaluationText $p.evaluation "EVALUATION"}
 
     try {
-        $null = Invoke-BruteRequest "https://cw.felk.cvut.cz/brute/teacher/upload.php" -PostParameters $p -PromptForSSOToken:$PromptForSSOToken
+        $null = Invoke-BruteRequest "https://cw.felk.cvut.cz/brute/teacher/upload.php" -PostParameters $p -PromptForSSOToken:(-not $NoTokenPrompt)
     } catch [Microsoft.PowerShell.Commands.HttpResponseException] {
         # 302 is the standard response for this endpoint
         if ($_.Exception.Response.StatusCode -ne 302) {
@@ -264,10 +266,10 @@ function New-BruteEvaluation {
         [Nullable[float]]$Penalty = $null,
         $Evaluation = $null,
         $Note = $null,
-        [switch]$PromptForSSOToken
+        [switch]$NoTokenPrompt
     )
 
-    $Eval = Get-BruteEvaluation $Url -PromptForSSOToken:$PromptForSSOToken
+    $Eval = Get-BruteEvaluation $Url -NoTokenPrompt:$NoTokenPrompt
     
     $null = $Eval.SetScore($ManualScore, $Penalty)
     
@@ -278,7 +280,7 @@ function New-BruteEvaluation {
         $Eval.SetNote($Note)
     }
 
-    return Set-BruteEvaluation $Eval -PromptForSSOToken:$PromptForSSOToken
+    return Set-BruteEvaluation $Eval -NoTokenPrompt:$NoTokenPrompt
 }
 
 
@@ -510,8 +512,8 @@ function Get-BruteCourseTable {
     [OutputType([BruteCourseTable])]
     param(
         [Parameter(Mandatory)][uri]$CourseUrl,
-        [switch]$PromptForSSOToken
+        [switch]$NoTokenPrompt
     )
 
-    return [BruteCourseTable]::new($CourseUrl, $PromptForSSOToken)
+    return [BruteCourseTable]::new($CourseUrl, -not $NoTokenPrompt)
 }
