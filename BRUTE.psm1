@@ -3,18 +3,26 @@ using module .\EvaluationFormatting.psm1
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-# if set to true, this module prompts for new SSO token on authentication failure,
-#  instead of throwing an exception
-$RETRY_ON_FAILED_AUTH = $False
 
-
-$TOKEN_FILE_PATH = if (Get-Command Get-PSDataPath -ErrorAction Ignore) {
+$TOKEN_FILE_PATH, $CONFIG_FILE_PATH = if (Get-Command Get-PSDataPath -ErrorAction Ignore) {
     # this function is from my custom profile (https://github.com/MatejKafka/powershell-profile)
-    Get-PSDataPath -NoCreate BruteSSOToken.txt
+    Get-PSDataPath BRUTE/SSOToken.txt -NoCreate
+    Get-PSDataPath BRUTE/config.json -NoCreate
 } else {
     # user does not have my custom profile with Get-PSDataPath, use a fallback path
     Join-Path $PSScriptRoot "_BruteSSOToken.txt"
+    Join-Path $PSScriptRoot "_config.json"
 }
+
+if (-not (Test-Path $CONFIG_FILE_PATH)) {
+    # set the default config
+    @{RetryRequestOnFailedAuth = $True} | ConvertTo-Json > $CONFIG_FILE_PATH
+}
+
+$CONFIG = cat $CONFIG_FILE_PATH | ConvertFrom-Json
+# if set to true, this module prompts for new SSO token on authentication failure,
+#  instead of throwing an exception
+$RETRY_ON_FAILED_AUTH = -not $CONFIG.ContainsKey("RetryRequestOnFailedAuth") -or $CONFIG["RetryRequestOnFailedAuth"]
 
 
 class InvalidBruteSSOTokenException : System.Exception {
