@@ -6,7 +6,7 @@
 
 	Description = 'Functions to interface with the BRUTE evaluation system at FEE CTU in Prague.'
 
-	FunctionsToExport = @('Set-BruteSSOToken', 'New-BruteEvaluation', 'Get-BruteEvaluation', 'Set-BruteEvaluation', 'Get-BruteUpload', 'Get-BruteCourseTable')
+	FunctionsToExport = @('Set-BruteSSOToken', 'New-BruteEvaluation', 'Get-BruteEvaluation', 'Set-BruteEvaluation', 'Get-BruteUpload', 'Get-BruteCourseTable', 'Invoke-BruteResultFileUpload')
 	CmdletsToExport = @()
 	VariablesToExport = @()
 	AliasesToExport = @()
