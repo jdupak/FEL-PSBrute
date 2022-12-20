@@ -133,7 +133,8 @@ function Invoke-BruteResultFileUpload($FileName, $UploadId, $TeamId, [switch]$Pr
 
     try {
         $Session = Get-HttpSession -PromptForSSOToken:$PromptForSSOToken
-        return Invoke-WebRequest "https://cw.felk.cvut.cz/brute/teacher/ajax_service.php" -Method Post -WebSession $Session -MaximumRedirection 0 -Body $MultipartContent
+        $res = Invoke-WebRequest "https://cw.felk.cvut.cz/brute/teacher/ajax_service.php" -Method Post -WebSession $Session -MaximumRedirection 0 -Body $MultipartContent
+        return (ConvertFrom-Json $res.Content).output
     } catch [Microsoft.PowerShell.Commands.HttpResponseException] {
         $res = $_.Exception.Response
         # check if we are being redirected to the SSO portal
