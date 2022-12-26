@@ -261,7 +261,12 @@ function New-BruteEvaluation {
     # Convenience wrapper around Get-BruteEvaluation and Set-BruteEvaluation.
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][uri]$Url,
+            [Parameter(Mandatory, Position = 0, ParameterSetName = "EvaluationInfo")]
+            [BruteEvaluation]
+        $EvaluationInfo,
+            [Parameter(Mandatory, Position = 0, ParameterSetName = "Url")]
+            [uri]
+        $Url,
         [Nullable[float]]$ManualScore = $null,
         [Nullable[float]]$Penalty = $null,
         $Evaluation = $null,
@@ -269,7 +274,7 @@ function New-BruteEvaluation {
         [switch]$NoTokenPrompt
     )
 
-    $Eval = Get-BruteEvaluation $Url -NoTokenPrompt:$NoTokenPrompt
+    $Eval = if ($EvaluationInfo) {$EvaluationInfo} else {Get-BruteEvaluation $Url -NoTokenPrompt:$NoTokenPrompt}
     
     $null = $Eval.SetScore($ManualScore, $Penalty)
     
