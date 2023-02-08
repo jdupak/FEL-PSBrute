@@ -71,13 +71,7 @@ function Get-HttpSession([switch]$NoTokenPrompt) {
 
 function Invoke-BruteRequest([Parameter(Mandatory)][uri]$Url, [Hashtable]$PostParameters = $null, $OutFile, [switch]$UseMultipart, [switch]$NoTokenPrompt) {
     $IwrParams = if ($PostParameters) {
-        # copy parameter Hashtable over to the query string dictionary $qp; for some reason,
-        #  the query string .NET class is not public, so we parse an empty string to get a usable instance
-        $qp = [System.Web.HttpUtility]::ParseQueryString("")
-        foreach ($k in $PostParameters.Keys) {
-            $qp[$k] = $PostParameters[$k]
-        }
-        @{Method = "POST"; Body = $qp.ToString(); ContentType = "application/x-www-form-urlencoded"}
+        @{Method = "POST"; $($UseMultipart ? "Form" : "Body") = $PostParameters}
     } else {
         @{} # GET request, no extra params
     }
