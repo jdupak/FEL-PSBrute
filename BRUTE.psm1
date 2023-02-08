@@ -3,10 +3,6 @@ using module .\EvaluationFormatting.psm1
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-# if set to true, this module prompts for new SSO token on authentication failure,
-#  instead of throwing an exception
-$RETRY_ON_FAILED_AUTH = $True
-
 
 $TOKEN_FILE_PATH = if (Get-Command Get-PSDataPath -ErrorAction Ignore) {
     # this function is from my custom profile (https://github.com/MatejKafka/powershell-profile)
@@ -25,10 +21,10 @@ class InvalidBruteSSOTokenException : System.Exception {
 # the cookie is always named "_shibsession_???...", the suffix varies
 # I use the following browser bookmark to copy the SSO token to clipboard:
 # `javascript:navigator.clipboard.writeText(document.cookie.split("; ").filter(c => c.startsWith("_shibsession")).join("; ")).then(() => alert("SSO token copied to the clipboard."), (err) => alert("Could not copy the SSO token: " + err))`
-function Set-BruteSSOToken([Parameter(Mandatory)][string]$Token, [switch]$PromptForSSOToken) {
+function Set-BruteSSOToken([Parameter(Mandatory)][string]$Token, [switch]$NoTokenPrompt) {
     $Token = $Token.Trim()
     if ($Token -notmatch "^_shibsession_[a-zA-Z0-9]+=.+$") {
-        return RetryWithNewSSOToken "Invalid SSO token cookie format. Expected something like '_shibsession_...=...'." $PromptForSSOToken
+        return RetryWithNewSSOToken "Invalid SSO token cookie format. Expected something like '_shibsession_...=...'." $NoTokenPrompt
     }
     Set-Content -NoNewline -Path $script:TOKEN_FILE_PATH $Token
 }
@@ -40,9 +36,9 @@ function RetryWithNewSSOToken {
     param(
         [Parameter(Mandatory)][System.Management.Automation.InvocationInfo]$MyInvocation_,
         [Parameter(Mandatory)][string]$ErrorMessage,
-        [bool]$PromptForSSOToken
+        [bool]$NoTokenPrompt
     )
-    if ($PromptForSSOToken) {
+    if (-not $NoTokenPrompt) {
         Write-Host -ForegroundColor Red $ErrorMessage
         Set-BruteSSOToken (Read-Host -MaskInput "Enter a new SSO token")
         # retry
@@ -60,20 +56,20 @@ function New-TemporaryPath($Extension = "", $Prefix = "") {
 }
 
 
-function Get-HttpSession([switch]$PromptForSSOToken) {
+function Get-HttpSession([switch]$NoTokenPrompt) {
     if (-not (Test-Path $TOKEN_FILE_PATH)) {
-        return RetryWithNewSSOToken $MyInvocation "SSO token not set, use 'Set-BruteSSOToken' to store it." $PromptForSSOToken
+        return RetryWithNewSSOToken $MyInvocation "SSO token not set, use 'Set-BruteSSOToken' to store it." $NoTokenPrompt
     }
     $AuthCookieName, $AuthCookieValue = (Get-Content -Raw $TOKEN_FILE_PATH) -split "=", 2
     if (-not $AuthCookieValue) {
-        return RetryWithNewSSOToken $MyInvocation "Malformed SSO token, use 'Set-BruteSSOToken' to replace it." $PromptForSSOToken
+        return RetryWithNewSSOToken $MyInvocation "Malformed SSO token, use 'Set-BruteSSOToken' to replace it." $NoTokenPrompt
     }
     $Session = [Microsoft.PowerShell.Commands.WebRequestSession]::new()
     $Session.Cookies.Add(([System.Net.Cookie]::new($AuthCookieName, $AuthCookieValue, "/", "cw.felk.cvut.cz")))
     return $Session
 }
 
-function Invoke-BruteRequest([Parameter(Mandatory)][uri]$Url, [Hashtable]$PostParameters = $null, $OutFile, [switch]$PromptForSSOToken) {
+function Invoke-BruteRequest([Parameter(Mandatory)][uri]$Url, [Hashtable]$PostParameters = $null, $OutFile, [switch]$UseMultipart, [switch]$NoTokenPrompt) {
     $IwrParams = if ($PostParameters) {
         # copy parameter Hashtable over to the query string dictionary $qp; for some reason,
         #  the query string .NET class is not public, so we parse an empty string to get a usable instance
@@ -88,13 +84,13 @@ function Invoke-BruteRequest([Parameter(Mandatory)][uri]$Url, [Hashtable]$PostPa
     if ($OutFile) {$IwrParams["OutFile"] = $OutFile}
 
     try {
-        $Session = Get-HttpSession -PromptForSSOToken:$PromptForSSOToken
+        $Session = Get-HttpSession -NoTokenPrompt:$NoTokenPrompt
         return Invoke-WebRequest $Url -WebSession $Session -MaximumRedirection 0 @IwrParams
     } catch [Microsoft.PowerShell.Commands.HttpResponseException] {
         $res = $_.Exception.Response
         # check if we are being redirected to the SSO portal
         if ($res.StatusCode -eq 302 -and $res.Headers.Location.OriginalString.StartsWith("https://idp2.civ.cvut.cz")) {
-            return RetryWithNewSSOToken $MyInvocation "Not authorized, did the SSO token expire?" $PromptForSSOToken
+            return RetryWithNewSSOToken $MyInvocation "Not authorized, did the SSO token expire?" $NoTokenPrompt
         }
         throw
     }
@@ -112,7 +108,7 @@ function Get-BruteUpload {
     # BRUTE always returns .tgz archives
     $DownloadPath = New-TemporaryPath ".tgz"
     try {
-        Invoke-BruteRequest $DownloadUrl -OutFile $DownloadPath -PromptForSSOToken:(-not $NoTokenPrompt)
+        Invoke-BruteRequest $DownloadUrl -OutFile $DownloadPath -NoTokenPrompt:$NoTokenPrompt
         $null = New-Item -Type Directory $OutputDir -Force
         tar xzf $DownloadPath --directory $OutputDir
     } finally {
@@ -194,8 +190,8 @@ function Get-BruteEvaluation {
     }
     $SubmissionDownloadUrl = $Matches[1] + "/download"
 
-    $Response = Invoke-BruteRequest $Url -PromptForSSOToken:(-not $NoTokenPrompt)
-    
+    $Response = Invoke-BruteRequest $Url -NoTokenPrompt:$NoTokenPrompt
+
     $AEParams = @{}
     # this is a file upload input to upload a custom PDF evaluation, not implemented yet
     $AEParams.upload_result = $null
@@ -245,7 +241,7 @@ function Set-BruteEvaluation {
     $p.evaluation = if ($Evaluation.EvaluationFieldIsRaw) {$p.evaluation} else {Format-EvaluationText $p.evaluation "EVALUATION"}
 
     try {
-        $null = Invoke-BruteRequest "https://cw.felk.cvut.cz/brute/teacher/upload.php" -PostParameters $p -PromptForSSOToken:(-not $NoTokenPrompt)
+        $null = Invoke-BruteRequest "https://cw.felk.cvut.cz/brute/teacher/upload.php" -PostParameters $p -NoTokenPrompt:$NoTokenPrompt
     } catch [Microsoft.PowerShell.Commands.HttpResponseException] {
         # 302 is the standard response for this endpoint
         if ($_.Exception.Response.StatusCode -ne 302) {
@@ -253,7 +249,7 @@ function Set-BruteEvaluation {
         } elseif ($_.Exception.Response.Headers.Location.OriginalString -notlike "/brute/teacher/course/*") {
             throw "Unexpected submission redirect target, check if it was submitted correctly: '$($_.Exception.Response.Headers.Location.OriginalString)'"
         }
-    }    
+    }
 }
 
 function New-BruteEvaluation {
@@ -275,9 +271,9 @@ function New-BruteEvaluation {
     )
 
     $Eval = if ($EvaluationInfo) {$EvaluationInfo} else {Get-BruteEvaluation $Url -NoTokenPrompt:$NoTokenPrompt}
-    
+
     $null = $Eval.SetScore($ManualScore, $Penalty)
-    
+
     if ($null -ne $Evaluation) {
         $Eval.SetEvaluationText($Evaluation)
     }
@@ -461,9 +457,9 @@ class BruteCourseTable {
     hidden [Microsoft.PowerShell.Commands.BasicHtmlWebResponseObject]$_Response
     hidden [BruteParallel[]]$_Parallels = $null
 
-    BruteCourseTable($CourseUrl, $PromptForSSOToken) {
+    BruteCourseTable($CourseUrl, $NoTokenPrompt) {
         $this.CourseUrl = $CourseUrl
-        $this._Response = Invoke-BruteRequest $CourseUrl -PromptForSSOToken:$PromptForSSOToken
+        $this._Response = Invoke-BruteRequest $CourseUrl -NoTokenPrompt:$NoTokenPrompt
     }
 
     [BruteParallel] GetParallel([string]$ID) {
@@ -520,5 +516,5 @@ function Get-BruteCourseTable {
         [switch]$NoTokenPrompt
     )
 
-    return [BruteCourseTable]::new($CourseUrl, -not $NoTokenPrompt)
+    return [BruteCourseTable]::new($CourseUrl, $NoTokenPrompt)
 }
