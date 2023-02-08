@@ -10,5 +10,8 @@
 	CmdletsToExport = @()
 	VariablesToExport = @()
 	AliasesToExport = @()
+
+	# we use types from .Utility in class definitions
+	RequiredAssemblies = @('Microsoft.PowerShell.Commands.Utility.dll')
 }
 
