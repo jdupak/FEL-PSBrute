@@ -90,6 +90,57 @@ function Invoke-BruteRequest([Parameter(Mandatory)][uri]$Url, [Hashtable]$PostPa
     }
 }
 
+function New-FormStringContent($Name,
+                               $Value) {
+    $Header = [System.Net.Http.Headers.ContentDispositionHeaderValue]::new("form-data")
+    $Header.Name = $Name
+    $Content = [System.Net.Http.StringContent]::new($Value)
+    $Content.Headers.ContentDisposition = $Header
+
+    return $Content
+}
+
+function New-FormFileContent($FileName,
+                             $FieldName,
+                             $ContentType) {
+    $FileStream = [System.IO.FileStream]::new((Resolve-Path $FileName), [System.IO.FileMode]::Open)
+    $FileHeader = [System.Net.Http.Headers.ContentDispositionHeaderValue]::new('form-data')
+    $FileHeader.Name = $FieldName
+    $FileHeader.FileName = Split-Path -leaf $FileName
+    $FileContent = [System.Net.Http.StreamContent]::new($FileStream)
+    $FileContent.Headers.ContentDisposition = $FileHeader
+    $FileContent.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse($ContentType)
+
+    return $FileContent
+}
+
+function Invoke-BruteResultFileUpload($FileName,
+                                      $UploadId,
+                                      $TeamId,
+                                      [switch]$PromptForSSOToken) {
+    $MultipartContent = [System.Net.Http.MultipartFormDataContent]::new()
+    # Only PDF is working in BRUTE, so it is not useful to propagate it to API.
+    $MultipartContent.Add((New-FormFileContent $FileName "upload_result" "application/pdf"))
+    $MultipartContent.Add((New-FormStringContent "file_id" "0"))
+    $MultipartContent.Add((New-FormStringContent "action" "upload_result"))
+    $MultipartContent.Add((New-FormStringContent "input_name" "upload_result"))
+    $MultipartContent.Add((New-FormStringContent "upload_id" $UploadId))
+    $MultipartContent.Add((New-FormStringContent "team_id" $TeamId))
+
+    try {
+        $Session = Get-HttpSession -PromptForSSOToken:$PromptForSSOToken
+        $res = Invoke-WebRequest "https://cw.felk.cvut.cz/brute/teacher/ajax_service.php" -Method Post -WebSession $Session -MaximumRedirection 0 -Body $MultipartContent
+        return (ConvertFrom-Json $res.Content).output
+    } catch [Microsoft.PowerShell.Commands.HttpResponseException] {
+        $res = $_.Exception.Response
+        # check if we are being redirected to the SSO portal
+        if ($res.StatusCode -eq 302 -and $res.Headers.Location.OriginalString.StartsWith("https://idp2.civ.cvut.cz")) {
+            return RetryWithNewSSOToken $MyInvocation "Not authorized, did the SSO token expire?" $PromptForSSOToken
+        }
+        throw
+    }
+}
+
 function Get-BruteUpload {
     [CmdletBinding()]
     param(
@@ -273,7 +324,8 @@ function New-BruteEvaluation {
         $Eval.SetNote($Note)
     }
 
-    return Set-BruteEvaluation $Eval -NoTokenPrompt:$NoTokenPrompt
+    Set-BruteEvaluation $Eval -NoTokenPrompt:$NoTokenPrompt
+    return $Eval
 }
 
 
