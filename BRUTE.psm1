@@ -231,8 +231,6 @@ function Set-BruteEvaluation {
     )
 
     $p = $Evaluation.Parameters
-    # render 'Evaluation Text' if not raw
-    $p.evaluation = if ($Evaluation.EvaluationFieldIsRaw) {$p.evaluation} else {Format-EvaluationText $p.evaluation "EVALUATION"}
 
     try {
         $null = Invoke-BruteRequest "https://cw.felk.cvut.cz/brute/teacher/upload.php" -PostParameters $p -NoTokenPrompt:$NoTokenPrompt
